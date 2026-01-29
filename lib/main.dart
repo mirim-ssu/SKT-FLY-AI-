@@ -43,7 +43,7 @@ class _HomePageState extends State<HomePage> {
   // ✅ 고정 입력(assets)
   // pubspec.yaml의 flutter/assets에 반드시 등록되어 있어야 함.
   static const String kWavAssetPath = 'assets/drums.wav';
-  static const String kJsonAssetPath = 'assets/converted_amps_1234.json';
+  static const String kJsonAssetPath = 'assets/drum_10ms_1234.json';
 
   @override
   void dispose() {
@@ -197,16 +197,17 @@ class _HomePageState extends State<HomePage> {
 
             // ✅ 요구사항 3) 사용자에게 설명 추가
             const Text(
-              '설정 설명',
+              '설명',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 6),
             const Text(
-              '• 진폭 스케일: 진동 “세기”를 전체적으로 키우거나 줄입니다.\n'
+              '• 진폭 스케일: 진동 세기를 전체적으로 키우거나 줄입니다.\n'
               '  (1.0이 기본, 0.5면 절반 느낌, 1.2면 조금 더 강하게)\n'
+              '• 재생 속도: 노래 재생 속도를 바꾸며, 진동도 같이 빨라지거나 느려지게 의도했습니다.\n'
               '• 싱크 오프셋(ms): 노래와 진동 타이밍이 어긋날 때 맞추는 값입니다.\n'
-              '  + 값: 진동을 늦춤 / - 값: 진동을 빠르게(오디오를 늦게 시작)\n'
-              '• 재생 속도: 노래 재생 속도를 바꾸며, 진동도 같이 빨라지거나 느려지게 “의도”했습니다.',
+              '  + 값: 진동을 늦춤 \n'
+              '  - 값: 진동을 빠르게(오디오를 늦게 시작)',
             ),
             const SizedBox(height: 12),
 
@@ -242,7 +243,7 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: 8),
             const Text(
-              '참고: dtMs를 5ms로 촘촘하게 하면, 기기/OS에 따라 진동이 뭉개질 수 있어요(확실하지 않음).',
+              '참고: dtMs를 5ms로 촘촘하게 하면, 기기/OS에 따라 진동이 뭉개질 수 있어요.',
             ),
           ],
         ),
