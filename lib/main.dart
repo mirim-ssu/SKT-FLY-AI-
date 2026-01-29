@@ -1,5 +1,3 @@
-import 'dart:io';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -32,18 +30,20 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _player = AudioPlayer();
 
-  String? wavPath;
-  String? jsonPath;
-
   DrumJson? drum;
-  String status = '파일을 선택하세요. (wav + json)';
+  String status = '준비됨 (assets의 wav/json을 사용합니다)';
 
   // 조절 파라미터
   double intensityScale = 1.0; // 진폭 스케일
   double speedScale = 1.0; // 재생 속도(오디오 + 진동 같이 적용)
-  int offsetMs = 0; // 싱크 미세 조정 (+면 진동을 늦춤, -면 빠름)
+  int offsetMs = 0; // 싱크 미세 조정 (+면 진동을 늦춤, -면 진동을 빠르게)
 
   bool isPlaying = false;
+
+  // ✅ 고정 입력(assets)
+  // pubspec.yaml의 flutter/assets에 반드시 등록되어 있어야 함.
+  static const String kWavAssetPath = 'assets/drums.wav';
+  static const String kJsonAssetPath = 'assets/converted_amps_1234.json';
 
   @override
   void dispose() {
@@ -51,68 +51,43 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  Future<void> pickWav() async {
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['wav'],
-    );
-    if (res?.files.single.path == null) return;
-
-    setState(() {
-      wavPath = res!.files.single.path!;
-      status = 'WAV 선택됨: ${File(wavPath!).uri.pathSegments.last}';
-    });
+  String _formatMsToMinSec(int ms) {
+    if (ms < 0) ms = 0;
+    final totalSec = (ms / 1000).floor();
+    final m = (totalSec ~/ 60).toString().padLeft(2, '0');
+    final s = (totalSec % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
-  Future<void> pickJson() async {
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['json'],
-    );
-    if (res?.files.single.path == null) return;
-
-    final path = res!.files.single.path!;
-    final text = await File(path).readAsString();
-
-    DrumJson parsed;
-    try {
-      parsed = DrumJson.fromJsonString(text);
-    } catch (e) {
-      setState(() => status = 'JSON 파싱 실패: $e');
-      return;
-    }
-
-    setState(() {
-      jsonPath = path;
-      drum = parsed;
-      status = 'JSON 선택됨: dtMs=${parsed.dtMs}, len=${parsed.amps.length}, total=${(parsed.totalMs / 1000).toStringAsFixed(1)}s';
-    });
+  Future<DrumJson> _loadDrumJsonFromAssets() async {
+    final jsonText = await rootBundle.loadString(kJsonAssetPath);
+    return DrumJson.fromJsonString(jsonText);
   }
 
   Future<void> start() async {
-    // ===== JSON asset 로드 =====
+    if (isPlaying) return;
+
+    // 1) JSON asset 로드
+    DrumJson parsed;
     try {
-      final jsonText = await rootBundle.loadString('assets/converted_amps_1234.json'); //json파일
-      drum = DrumJson.fromJsonString(jsonText);
+      parsed = await _loadDrumJsonFromAssets();
     } catch (e) {
-      setState(() => status = 'JSON 로드 실패: $e');
+      setState(() => status = 'JSON 로드/파싱 실패: $e');
       return;
     }
+    drum = parsed;
 
-    // ===== 오디오 asset 로드 =====
+    // 2) 오디오 asset 준비
     try {
-      await _player.setAsset('assets/drums.wav'); //wav파일
+      await _player.setAsset(kWavAssetPath);
+      await _player.setSpeed(speedScale);
     } catch (e) {
       setState(() => status = '오디오 로드 실패: $e');
       return;
     }
 
-    await _player.setSpeed(speedScale);
-
-    // 진동 패턴 준비 (RLE 압축)
-    final d = drum!;
-    // dtMs=5를 목표로 했지만, 실제 JSON의 dtMs를 우선 존중.
-    // (JSON 생성 단계에서 5ms로 만들어주면 그대로 동작)
+    // 3) 진동 패턴 준비
+    final d = parsed;
     final dtMs = d.dtMs;
 
     final wf = HapticsEngine.buildWaveform(
@@ -121,34 +96,41 @@ class _HomePageState extends State<HomePage> {
       intensityScale: intensityScale,
     );
 
-    // 기존 재생 중이면 정리
+    // 4) 기존 재생 중이면 정리
     await HapticsEngine.stop();
     await _player.stop();
 
-    // 싱크 시작: "동시에" 시작을 최대한 맞추되,
-    // offsetMs로 미세조정 가능하게 함.
-    // offsetMs > 0 : 진동 늦춤
-    // offsetMs < 0 : 진동 먼저(오디오를 늦출 수는 없어서, 이 경우엔 진동 패턴 앞에 무진동 구간을 줄여야 함)
+    // 5) "동시에" 시작
+    // 요구사항 2) 재생 버튼 누르면 노래와 진동이 함께 시작
+    // - offsetMs가 0이면 거의 동시에 시작
+    // - offsetMs로 사용자가 보정 가능
     if (offsetMs >= 0) {
+      // 오디오 먼저 시작 후, offset만큼 늦게 진동 시작 (진동을 늦춤)
       await _player.play();
       if (offsetMs > 0) {
         await Future.delayed(Duration(milliseconds: offsetMs));
       }
-      await HapticsEngine.playWaveform(pattern: wf.pattern, intensities: wf.intensities);
+      await HapticsEngine.playWaveform(
+        pattern: wf.pattern,
+        intensities: wf.intensities,
+      );
     } else {
-      // 음수면: 진동을 앞당기는 대신, 오디오를 offset만큼 늦게 시작
-      // (가장 간단/안전한 방식)
-      await HapticsEngine.playWaveform(pattern: wf.pattern, intensities: wf.intensities);
+      // 진동 먼저 시작 후, offset만큼 늦게 오디오 시작 (진동을 빠르게)
+      await HapticsEngine.playWaveform(
+        pattern: wf.pattern,
+        intensities: wf.intensities,
+      );
       await Future.delayed(Duration(milliseconds: -offsetMs));
       await _player.play();
     }
 
     setState(() {
       isPlaying = true;
-      status = '재생 시작 (dtMs=$dtMs, speed=$speedScale, intensity=$intensityScale, offset=$offsetMs ms)';
+      status =
+          '재생 시작 (dtMs=$dtMs, speed=${speedScale.toStringAsFixed(2)}, intensity=${intensityScale.toStringAsFixed(2)}, offset=$offsetMs ms)';
     });
 
-    // 종료 감지
+    // 6) 종료 감지
     _player.playerStateStream.listen((st) async {
       if (st.processingState == ProcessingState.completed) {
         await stop();
@@ -170,6 +152,11 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final d = drum;
+
+    final totalStr = (d == null)
+        ? '--:--'
+        : _formatMsToMinSec(d.totalMs);
+
     return Scaffold(
       appBar: AppBar(title: const Text('Drum JSON → Haptics (Android)')),
       body: Padding(
@@ -180,12 +167,12 @@ class _HomePageState extends State<HomePage> {
             Text(status),
             const SizedBox(height: 12),
 
+            // ✅ 요구사항 1) 사용자 파일 선택 UI 제거
+            // ✅ 요구사항 2) 재생 버튼 누르면 함께 시작
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                ElevatedButton(onPressed: pickWav, child: const Text('WAV 선택')),
-                ElevatedButton(onPressed: pickJson, child: const Text('JSON 선택')),
                 ElevatedButton(
                   onPressed: isPlaying ? null : start,
                   child: const Text('▶ 재생'),
@@ -199,9 +186,29 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: 16),
             if (d != null) ...[
-              Text('dtMs=${d.dtMs} / samples=${d.amps.length} / total=${(d.totalMs / 1000).toStringAsFixed(1)}s'),
+              Text(
+                'dtMs=${d.dtMs} / samples=${d.amps.length} / total=$totalStr',
+              ),
+              const SizedBox(height: 12),
+            ] else ...[
+              const Text('아직 JSON을 로드하지 않았습니다. (재생을 누르면 assets에서 자동 로드)'),
               const SizedBox(height: 12),
             ],
+
+            // ✅ 요구사항 3) 사용자에게 설명 추가
+            const Text(
+              '설정 설명',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '• 진폭 스케일: 진동 “세기”를 전체적으로 키우거나 줄입니다.\n'
+              '  (1.0이 기본, 0.5면 절반 느낌, 1.2면 조금 더 강하게)\n'
+              '• 싱크 오프셋(ms): 노래와 진동 타이밍이 어긋날 때 맞추는 값입니다.\n'
+              '  + 값: 진동을 늦춤 / - 값: 진동을 빠르게(오디오를 늦게 시작)\n'
+              '• 재생 속도: 노래 재생 속도를 바꾸며, 진동도 같이 빨라지거나 느려지게 “의도”했습니다.',
+            ),
+            const SizedBox(height: 12),
 
             Text('진폭 스케일: ${intensityScale.toStringAsFixed(2)}'),
             Slider(
@@ -235,7 +242,7 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: 8),
             const Text(
-              '참고: dtMs를 5ms로 촘촘하게 하면, 기기/OS에 따라 진동이 뭉개질 수 있어요(확실하지 않음). 그래도 waveform 방식이 가장 안정적입니다.',
+              '참고: dtMs를 5ms로 촘촘하게 하면, 기기/OS에 따라 진동이 뭉개질 수 있어요(확실하지 않음).',
             ),
           ],
         ),
